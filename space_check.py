@@ -20,7 +20,7 @@ def get_space_usage_only(A):
 def _get_interval_list_from_row(r):
     ''' Returns the intervals on which a row is constant.
 
-    NOTE: Assumes that r[i] <= r[i+1].
+    NOTE: Assumes that r[i] <= r[i+1]. (Always true for MRMs)
 
     Parameters:
     r: A numpy array representing a row. 
@@ -109,6 +109,8 @@ def _is_dyadic_interval(a, b):
 def verify_efficient_structure(A, verbose=False):
     ''' Checks if a lower-triangular matrix can compute one row given the past row efficiently.
 
+    Close to being "binnable", but does not allow for any entry to appear multiple times for disjoint intervals.
+
     Parameters:
     A: A square lower-triangular matrix.
     verbose: 'True' to activate more printing.
@@ -116,8 +118,7 @@ def verify_efficient_structure(A, verbose=False):
     Returns:
     The function returns three outputs:
         1. 'True' if the intervals across all rows in the matrix align to allow for space-efficiency.
-        2. Integer representing the number of floats needed to store intermediate computation.
-            Same computation as 'get_space_usage_only'.
+        2. Integer representing the size of the binning. Same computation as 'get_space_usage_only'.
         3. True if all underlying intervals are dyadic.
     '''
     n = A.shape[0]

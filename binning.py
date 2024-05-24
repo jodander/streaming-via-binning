@@ -81,8 +81,8 @@ def get_variance(L, R):
     return np.square(np.linalg.norm(L, axis=1, ord=2)) * (sensitivity ** 2)
 
 def get_mse(L, R):
-    """ Returns the MSE over all outputs from running the matrix mechansims based on A = LR
-    with the Gaussian mechanism and rho=1/2.
+    """ Returns the expected mean-squared error over all outputs from running the matrix mechansims based on A = LR
+    with the Gaussian mechanism and rho=1/2. Equivalent to 'mean variance'.
 
     Assuming that A=LR is a square matrix of dimension 'n', this algorithm reports the variance
     as an array of length 'n', where the i^th entry is the variance from answering the query 
@@ -97,8 +97,22 @@ def get_mse(L, R):
     """
     return get_variance(L, R).mean()
 
-def get_max_rse(L, R):
-    return math.sqrt(get_variance(L, R).max())
+def get_max_se(L, R):
+    """ Returns the maximum expected square error over all outputs from running the matrix mechansims based on A = LR
+    with the Gaussian mechanism and rho=1/2. Equivalent to 'maximum variance'.
+
+    Assuming that A=LR is a square matrix of dimension 'n', this algorithm reports the variance
+    as an array of length 'n', where the i^th entry is the variance from answering the query 
+    corresponding to the the i^th row in A.
+
+    Parameters:
+    L : A decoder matrix of dimension [n, d]
+    R : An encoder matrix of dimension [d, n]
+
+    Returns:
+    The MSE over all outputs.
+    """
+    return get_variance(L, R).max()
 
 def compute_sensitivity(R):
     ''' Computes the sensitivity of a matrix mechanism where 'R' is the encoder matrix
@@ -113,144 +127,91 @@ def compute_sensitivity(R):
     '''
     return np.linalg.norm(R, axis=0, ord=2).max()
 
-def approx_row(r, threshold_f, mode='mean'):
-    ''' Approximates a row of a matrix.
-
-    NOTE: Changes 'r' in-place.
-        Also, assumes 'r' is non-decreasing along its axis.
+def merge_intervals(intervals, r, c):
+    """ Merges intervals in a partition on the line under the condition of Algorithm 1 in the paper.
 
     Parameters:
-    r: The row to be approximated.
-    threshold_f: A function that takes an integer 'i' as input and outputs a threshold 't' where
-        if the right-endpoint of a dyadic interval of size '2^i' satisfies, then all values in
-        the interval are set to the same with rule derived from 'mode',
-    mode: The rule for how all values covered by an interval are to be approximated.
-        Options:
-        1) 'left' : set to the left-endpoint.
-        2) 'right' : set to the right-endpoint.
-        3) 'mean' : set to the mean of all entries in the interval.
-        Default: 'mean'
-    
+    intervals : List of intervals to merge. Intervals[0] is the diagonal singleton.
+    r : The corresponding row of the matrix which is undergoing the merge.
+    c : The parameter c from Algorithm 1.
+
     Returns:
-    The approximated row.
-    '''
+    The new merged interval list.
+    """
 
-    n = r.shape[0]
-    if n == 1:
-        return r
-    lvl = int(math.floor(math.log2(n)))
-    interval_size = int(2 ** lvl)
-
-    i = 0
-    while i < n and lvl > 0:
-        i_check = i + interval_size - 1
-        #print(f"i_check={i_check}, lvl={lvl}, interval_size={interval_size}")
-
-        # Check if the value is small enough to be 'chunked'
-        if i_check < n and r[i_check] < threshold_f(lvl):
-            # TODO: Consider alternative settings
-            if mode == 'left':
-                r[i : i_check + 1] = r[i] # set to left end-point
-            elif mode == 'right':
-                r[i : i_check + 1] = r[i_check] # set to right end-point
-            elif mode == 'mean':
-                r[i : i_check + 1] = r[i : i_check + 1].mean() # set to mean
-            elif mode == 'squared-mean':
-                r[i : i_check + 1] = np.sqrt(np.square(r[i : i_check + 1]).mean()) # questionable
-
-            i = i_check + 1
-        else: # If not possible, look at smaller intervals.
-            lvl -= 1
-            interval_size = interval_size // 2
-    return r
-
-
-# E.g. [(10, 10), (9, 8), (7, 4), ..]
-
-# TODO: Consider having to do multiple merges.
-# Intervals are in order [(t, t), (t-1, s) ..., (q, 0)]
-def merge_intervals(intervals, r, c, w):
-
-    # Default to checking all elements
-    if w is None:
-        w = 0
-
-    # First, compute the new interval list after a merge
-    new_intervals = []
-    idx = 0
-    # Store exactly the first 's' values
-    while idx < w and idx < len(intervals):
-        new_intervals.append(intervals[idx])
-        idx += 1
+    # Always add the diagonal element
+    new_intervals = [intervals[0]]
+    interval_idx = 1
 
     # Greedily merge from then on
-    while idx < len(intervals) - 1:
-        curr_start, curr_end = intervals[idx]
+    while interval_idx < len(intervals) - 1:
+        left_idx, right_idx = intervals[interval_idx]
 
-        # Check the smallest value over the largest in interval
-        curr_val = r[curr_end] / r[curr_start]
+        # The current fraction
+        curr_val = r[left_idx] / r[right_idx + 1]
 
-        # We can now consider merging it.
-        merge_idx = None
-        next_idx = idx + 1
-        next_start, next_end = intervals[next_idx]
-        new_val = r[next_end] / r[curr_start]
+        # We consider merging it.
+        interval_merge_idx = None
+        next_interval_idx = interval_idx + 1
+        next_left_idx, next_right_idx = intervals[next_interval_idx]
+        new_val = r[next_left_idx] / r[right_idx + 1]
 
         # We can consider merging the interval
-        while next_idx < len(intervals) and curr_val > c and new_val > c**2:
+        while next_interval_idx < len(intervals) and curr_val > c and new_val >= c**2:
 
-            merge_idx = next_idx
-            curr_val = r[merge_idx] / r[curr_start]
+            interval_merge_idx = next_interval_idx
+            next_left_idx, next_right_idx = intervals[next_interval_idx]
+            curr_val = new_val
 
-            next_idx += 1
+            next_interval_idx += 1
 
             # abort once we hit the end
-            if next_idx == len(intervals):
+            if next_interval_idx == len(intervals):
                 break
-            next_start, next_end = intervals[next_idx]
-            new_val = r[next_end] / r[curr_start]
 
-        if merge_idx is None:
-            # Sanity check
-            ####
-            start, end = intervals[idx]
-            assert r[end] / r[start] > c ** 2
-            ####
+            next_left_idx, next_right_idx = intervals[next_interval_idx]
+            new_val = r[next_left_idx] / r[right_idx + 1]
 
-            new_intervals.append(intervals[idx])
-            idx += 1
+        if interval_merge_idx is None:
+            # Sanity check : make sure any interval we have satisfies the condition we enforce
+            left_idx, right_idx = intervals[interval_idx]
+            assert left_idx == right_idx or r[left_idx] / r[right_idx + 1] >= c ** 2, ""
+
+            new_intervals.append(intervals[interval_idx])
+            interval_idx += 1
             continue
         else:
-            new_intervals.append((intervals[idx][0], intervals[merge_idx][1]))
-            idx = merge_idx + 1
+            new_intervals.append((intervals[interval_merge_idx][0], intervals[interval_idx][1]))
+            interval_idx = interval_merge_idx + 1
 
-    # Make sure not to skip the last interval.
+    # Make sure not to skip the last interval in case it did not get merged.
     if len(new_intervals) == 0 or (new_intervals[-1][1] != intervals[-1][1]):
         new_intervals.append(intervals[-1])
     
     return new_intervals
 
-def _approximation_rule(r, idx_start, idx_end, mode):
-
+# Approximation rule, always 'mean' by default and is what is used for the paper.
+def _approximation_rule(r, idx_start, idx_end, mode='mean'):
     val = None
     if mode == 'left':
-        val = r[idx_end] # set to left end-point
+        val = r[idx_start] # set to left end-point
     elif mode == 'right':
-        val = r[idx_start] # set to right end-point
+        val = r[idx_end] # set to right end-point
     elif mode == 'mean':
-        val = r[idx_end : idx_start + 1].mean() # set to mean
+        val = r[idx_start : idx_end + 1].mean() # set to mean
     elif mode == 'squared-mean':
-        val = np.sqrt(np.square(r[idx_end : idx_start + 1]).mean()) # questionable
+        val = np.sqrt(np.square(r[idx_start : idx_end + 1]).mean()) # questionable
     return val
 
 def intervals_to_row(intervals, r, mode):
-    ''' RETURNS IT IN-PLACE!!! '''
+    ''' Updates the matrix row 'r' in-place based on 'mode'. '''
     for start, end in intervals:
-        r[end : start + 1] = _approximation_rule(r, start, end, mode)
-    
+        r[start : end + 1] = _approximation_rule(r, start, end, mode)
     return r
 
-def approx_matrix(A, c, w, perform_extra_checks=False):
+# Approximates a lower-triangular matrix based on Algorithm 1 in the paper.
+def approx_matrix(A, c, perform_extra_checks=False):
+    """ Performs a binning of matrix 'A' using Algorithm 1 with input parameter 'c'. """
 
     space_requirement = 0
     assert A.shape[0] == A.shape[1]
@@ -258,7 +219,7 @@ def approx_matrix(A, c, w, perform_extra_checks=False):
     for i in range(A.shape[0]):
         # Compute intervals after a merge
         intervals.insert(0, (i, i))
-        intervals = merge_intervals(intervals, A[i, :i+1], c, w)
+        intervals = merge_intervals(intervals, A[i, :i+1], c)
         space_requirement = max(space_requirement, len(intervals))
 
         # Use the intervals to express the row
@@ -271,8 +232,10 @@ def approx_matrix(A, c, w, perform_extra_checks=False):
 
     return A, space_requirement
 
-def approx_bennett_mm(n, c, w=None, perform_extra_checks=False):
-    L, space_requirement = approx_matrix(bennett_matrix(n), c, w)
+def approx_bennett_mm(n, c, perform_extra_checks=False):
+    """ Performs a binning of the Bennett matrix of size 'n' using Algorithm 1 with input parameter 'c'. """
+
+    L, space_requirement = approx_matrix(bennett_matrix(n), c)
     # Compute the corresponding R
     R = scipy.linalg.solve_triangular(L, counting_matrix(n), lower=True)
 
