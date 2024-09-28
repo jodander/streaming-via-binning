@@ -63,8 +63,8 @@ def get_variance(L, R):
     corresponding to the the i^th row in A.
 
     Parameters:
-    L : A matrix of dimension [d, b]
-    R : A matrix
+    L : A decoder matrix of dimension [n, d]
+    R : An encoder matrix of dimension [d, n]
 
     Returns:
     An array of floats where each entry is the variance of the corresponding output.
@@ -107,8 +107,8 @@ def get_max_se(L, R):
     return get_variance(L, R).max()
 
 def compute_sensitivity(R):
-    ''' Computes the sensitivity of a matrix mechanism where 'R' is the encoder matrix
-    and we are concerned with rho-zCDP.
+    ''' Computes the 'ell-2' sensitivity of a matrix mechanism where 'R' is the encoder matrix
+    and we are dealing with a 'ell-1' neighboring relation.
 
     Parameters:
     R: An encoder matrix.
