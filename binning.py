@@ -51,14 +51,6 @@ def _bennett_matrix_via_sqrtm(T):
     return scipy.linalg.sqrtm( counting_matrix(T) )
 
 # Corresponds to f(k) in HUU'23
-def bennett_constant_k_old(k):
-    ''' Returns the value of B[i, j] = b(i-j) '''
-    if k < 0:
-        return 0
-    output = 1
-    for i in range(k):
-        output *= (1.0 - 0.5 / (i + 1))
-    return output
 def bennett_constant_k(k):
     return math.comb(2*k, k) / math.pow(4, k)
 
@@ -110,7 +102,7 @@ def get_max_se(L, R):
     R : An encoder matrix of dimension [d, n]
 
     Returns:
-    The MSE over all outputs.
+    The MaxSE over all outputs.
     """
     return get_variance(L, R).max()
 
@@ -175,7 +167,7 @@ def merge_intervals(intervals, r, c):
         if interval_merge_idx is None:
             # Sanity check : make sure any interval we have satisfies the condition we enforce
             left_idx, right_idx = intervals[interval_idx]
-            assert left_idx == right_idx or r[left_idx] / r[right_idx + 1] >= c ** 2, ""
+            assert left_idx == right_idx or r[left_idx] / r[right_idx + 1] >= c ** 2
 
             new_intervals.append(intervals[interval_idx])
             interval_idx += 1
@@ -185,7 +177,7 @@ def merge_intervals(intervals, r, c):
             interval_idx = interval_merge_idx + 1
 
     # Make sure not to skip the last interval in case it did not get merged.
-    if len(new_intervals) == 0 or (new_intervals[-1][1] != intervals[-1][1]):
+    if (new_intervals[-1][0] != intervals[-1][0]):
         new_intervals.append(intervals[-1])
     
     return new_intervals
@@ -211,14 +203,19 @@ def intervals_to_row(intervals, r, mode):
 
 # Approximates a lower-triangular matrix based on Algorithm 1 in the paper.
 def approx_matrix(A, c, perform_extra_checks=False):
-    """ Performs a binning of matrix 'A' using Algorithm 1 with input parameter 'c'. """
+    """ Performs a binning of matrix 'A' using Algorithm 1 with input parameter 'c'. 
+    
+    WARNING: Updates 'A' in-place. 
+    
+    """
 
     space_requirement = 0
-    assert A.shape[0] == A.shape[1]
+    assert A.shape[0] == A.shape[1], "Not a square matrix!"
     intervals = []
     for i in range(A.shape[0]):
         # Compute intervals after a merge
         intervals.insert(0, (i, i))
+        assert A[i, :i+1].min() > 0, f"Non-non-negative entry encountered in {i}-th row of A"
         intervals = merge_intervals(intervals, A[i, :i+1], c)
         space_requirement = max(space_requirement, len(intervals))
 
@@ -228,16 +225,81 @@ def approx_matrix(A, c, perform_extra_checks=False):
     if perform_extra_checks:
         is_aligned, space, _ = space_check.verify_efficient_structure(A)
         assert is_aligned, "The rows in the matrix are not aligned to allow for streaming"
-        assert space_requirement == space, "Conflicting results for space needed"
+        assert space_requirement == space, f"Conflicting results for space needed {space_requirement}!={space}"
 
     return A, space_requirement
 
 def approx_bennett_mm(n, c, perform_extra_checks=False):
     """ Performs a binning of the Bennett matrix of size 'n' using Algorithm 1 with input parameter 'c'. """
 
-    L, space_requirement = approx_matrix(bennett_matrix(n), c)
+    L, space_requirement = approx_matrix(bennett_matrix(n), c, perform_extra_checks=perform_extra_checks)
     # Compute the corresponding R
     R = scipy.linalg.solve_triangular(L, counting_matrix(n), lower=True)
 
     return L, R, space_requirement
     
+def check_if_monotone_ratio(A):
+    """Checks if a lower-triangular matrix 'A'has a monotone ratio.
+    
+    See Property 3) in Definition 7 of our paper 
+    
+    """
+    assert A.shape[0] == A.shape[1]
+    n = A.shape[0]
+
+    for j1 in range(n):
+        for j2 in range(j1+1, n):
+            h = A[j2:, j1] / A[j2:, j2]
+
+            # Find out if 'h' is non-decreasing
+            if any( np.diff(h) < 0 ):
+                return False
+    return True
+
+###
+# Related to momentum + weight decay
+###
+def counting_matrix_with_decay_and_momentum(n, alpha, beta):
+    """ Return A_{'alpha', 'beta'}) of size 'n'. 
+    
+    See https://arxiv.org/pdf/2405.13763 Section 3.1 for more information.
+    
+    """
+
+    assert beta >= 0
+    assert beta < alpha
+    assert alpha <= 1
+
+    a = np.array( [ math.pow(alpha, i+1) - math.pow(beta, i+1) for i in range(n) ] ) / (alpha - beta)
+
+    return scipy.linalg.toeplitz(a, [1] + [0] * (n - 1))
+
+def get_square_root_matrix(n, alpha, beta):
+    """ Return sqrt(A_{'alpha', 'beta'}) of size 'n'.
+    
+    See https://arxiv.org/pdf/2405.13763 Section 3.1 for more information.
+    
+    """
+
+    assert beta >= 0
+    assert beta < alpha
+    assert alpha <= 1
+
+    r = np.array( [abs(scipy.special.binom(-0.5, i)) for i in range(n)] )
+
+    c = np.ones(n)
+    for j in range(1, n):
+        c[j] = sum( math.pow(alpha, j - i) * math.pow(beta, i) * r[j-i] * r[i] for i in range(j+1) )
+
+    assert c.min() > 0, "Entry <= 0 encountered in c"
+
+    return scipy.linalg.toeplitz(c, [1] + [0] * (n - 1))
+
+def approx_counting_with_decay_momentum(n, alpha, beta,  c, perform_extra_checks=False):
+    """ Performs a binning of sqrt(A_{'alpha', 'beta'}) of size 'n' using Algorithm 1 with input parameter 'c'. """
+
+    L, space_requirement = approx_matrix(get_square_root_matrix(n, alpha, beta), c, perform_extra_checks=perform_extra_checks)
+    # Compute the corresponding R
+    R = scipy.linalg.solve_triangular(L, counting_matrix_with_decay_and_momentum(alpha=alpha, beta=beta, n=n), lower=True)
+
+    return L, R, space_requirement
