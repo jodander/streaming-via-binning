@@ -1,0 +1,2 @@
+This file serves as a placeholder file for indexing this folder.
+The folder is used for outputting figures.

@@ -1,6 +1,7 @@
+import math
+
 import numpy as np
 import scipy.linalg
-import math
 
 import space_check
 
@@ -30,6 +31,21 @@ def diff_matrix(n):
     np.fill_diagonal(mat[1:, :], -1)
     return mat
 
+def bennett_coefficients(n):
+    ''' Computes the entries c of the Bennett matrix where c[k] = (2k choose k) / 4^k
+
+    Parameters:
+    n: Number coefficients to compute.
+
+    Returns:
+    An n-dimensional array storing the subdiagonals of the Bennett matrix.
+    '''
+    c = np.zeros(n)
+    c[0] = 1
+    for k in range(1, n):
+        c[k] = (1.0 - 0.5/k) * c[k-1]
+    return c
+
 def bennett_matrix(n):
     ''' Returns the matrix which is the square-root of the counting matrix.
     
@@ -37,21 +53,16 @@ def bennett_matrix(n):
     n: The resulting matrix is (n, n)
 
     Returns:
-    The Bennet matrix of dimension 'n' by 'n'.
+    The Bennett matrix of dimension 'n' by 'n'.
     '''
-    mat = np.zeros(shape=(n,n), dtype=float)
-    entry_val = 1
-    for k in range(n):
-        np.fill_diagonal(mat[k:,:], entry_val)
-        entry_val *= (1.0 - 0.5/(k+1))
-    return mat
+    return scipy.linalg.toeplitz( bennett_coefficients(n), [1] + [0] * (n-1) )
 
 # NOTE: Much, much slower. But serves as a sanity check.
 def _bennett_matrix_via_sqrtm(T):
     return scipy.linalg.sqrtm( counting_matrix(T) )
 
-# Corresponds to f(k) in HUU'23
-def bennett_constant_k(k):
+def bennett_coefficient(k):
+    ''' Returns the value of the 'k'th subdiagonal of the Bennett matrix'''
     return math.comb(2*k, k) / math.pow(4, k)
 
 def get_variance(L, R):
@@ -107,8 +118,8 @@ def get_max_se(L, R):
     return get_variance(L, R).max()
 
 def compute_sensitivity(R):
-    ''' Computes the 'ell-2' sensitivity of a matrix mechanism where 'R' is the encoder matrix
-    and we are dealing with a 'ell-1' neighboring relation.
+    ''' Computes the L2-sensitivity of a matrix mechanism where 'R' is the encoder matrix
+    and we are dealing with an L1 neighboring relation.
 
     Parameters:
     R: An encoder matrix.
@@ -119,68 +130,72 @@ def compute_sensitivity(R):
     '''
     return np.linalg.norm(R, axis=0, ord=2).max()
 
-def merge_intervals(intervals, r, c):
-    """ Merges intervals in a partition on the line under the condition of Algorithm 1 in the paper.
+def merge_intervals(intervals, r, c, tau):
+    """ Merges intervals in a partition under specific conditions.
+
+    Corresponds to merging intervals for one row in Algorithm 1.
 
     Parameters:
-    intervals : List of intervals to merge. Intervals[0] is the diagonal singleton.
-    r : The corresponding row of the matrix which is undergoing the merge.
-    c : The parameter c from Algorithm 1.
+    intervals : List of intervals to merge; intervals[0] is the diagonal singleton.
+    r : Row of the matrix undergoing merge.
+    c : Condition parameter from Algorithm 1.
+    tau : Threshold parameter from Algorithm 1.
 
     Returns:
-    The new merged interval list.
+    List of merged intervals.
     """
+    
+    # Start with the diagonal element
+    merged_intervals = [intervals[0]]
+    idx = 1  # Index for interval iteration
 
-    # Always add the diagonal element
-    new_intervals = [intervals[0]]
-    interval_idx = 1
+    while idx < len(intervals) - 1:
+        left, right = intervals[idx]
 
-    # Greedily merge from then on
-    while interval_idx < len(intervals) - 1:
-        left_idx, right_idx = intervals[interval_idx]
+        # Check if merging is feasible based on conditions
+        if r[right + 1] == 0 or r[right] < tau:
+            merge_idx = len(intervals) - 1  # Set to last if tau condition met
+            next_idx = len(intervals)
+        else:
+            # Calculate initial merge potential
+            curr_val = r[left] / r[right + 1]
+            merge_idx = None
+            next_idx = idx + 1
+            next_left, next_right = intervals[next_idx]
+            next_val = r[next_left] / r[right + 1]
 
-        # The current fraction
-        curr_val = r[left_idx] / r[right_idx + 1]
-
-        # We consider merging it.
-        interval_merge_idx = None
-        next_interval_idx = interval_idx + 1
-        next_left_idx, next_right_idx = intervals[next_interval_idx]
-        new_val = r[next_left_idx] / r[right_idx + 1]
-
-        # We can consider merging the interval
-        while next_interval_idx < len(intervals) and curr_val > c and new_val >= c**2:
-
-            interval_merge_idx = next_interval_idx
-            next_left_idx, next_right_idx = intervals[next_interval_idx]
-            curr_val = new_val
-
-            next_interval_idx += 1
-
-            # abort once we hit the end
-            if next_interval_idx == len(intervals):
+        # Continue merging as long as conditions hold
+        while next_idx < len(intervals) and curr_val > c and next_val >= c**2:
+            if r[next_left] < tau:
+                merge_idx = len(intervals) - 1  # Merge to end if threshold met
                 break
 
-            next_left_idx, next_right_idx = intervals[next_interval_idx]
-            new_val = r[next_left_idx] / r[right_idx + 1]
+            # Update merge index and values
+            merge_idx = next_idx
+            curr_val = next_val
 
-        if interval_merge_idx is None:
-            # Sanity check : make sure any interval we have satisfies the condition we enforce
-            left_idx, right_idx = intervals[interval_idx]
-            assert left_idx == right_idx or r[left_idx] / r[right_idx + 1] >= c ** 2
+            next_idx += 1
+            if next_idx == len(intervals):  # Exit if at end
+                break
 
-            new_intervals.append(intervals[interval_idx])
-            interval_idx += 1
-            continue
+            next_left, next_right = intervals[next_idx]
+            next_val = r[next_left] / r[right + 1]
+
+        # Add interval to merged list if it didn't meet merge conditions
+        if merge_idx is None:
+            assert left == right or r[left] / r[right + 1] >= c ** 2  # Condition check
+            merged_intervals.append(intervals[idx])
+            idx += 1
         else:
-            new_intervals.append((intervals[interval_merge_idx][0], intervals[interval_idx][1]))
-            interval_idx = interval_merge_idx + 1
+            # Merge selected interval
+            merged_intervals.append((intervals[merge_idx][0], intervals[idx][1]))
+            idx = merge_idx + 1
 
-    # Make sure not to skip the last interval in case it did not get merged.
-    if (new_intervals[-1][0] != intervals[-1][0]):
-        new_intervals.append(intervals[-1])
-    
-    return new_intervals
+    # Ensure last interval is added if unmerged
+    if merged_intervals[-1][0] != intervals[-1][0]:
+        merged_intervals.append(intervals[-1])
+
+    return merged_intervals
 
 # Approximation rule, always 'mean' by default and is what is used for the paper.
 def _approximation_rule(r, idx_start, idx_end, mode='mean'):
@@ -191,8 +206,6 @@ def _approximation_rule(r, idx_start, idx_end, mode='mean'):
         val = r[idx_end] # set to right end-point
     elif mode == 'mean':
         val = r[idx_start : idx_end + 1].mean() # set to mean
-    elif mode == 'squared-mean':
-        val = np.sqrt(np.square(r[idx_start : idx_end + 1]).mean()) # questionable
     return val
 
 def intervals_to_row(intervals, r, mode):
@@ -202,21 +215,25 @@ def intervals_to_row(intervals, r, mode):
     return r
 
 # Approximates a lower-triangular matrix based on Algorithm 1 in the paper.
-def approx_matrix(A, c, perform_extra_checks=False):
-    """ Performs a binning of matrix 'A' using Algorithm 1 with input parameter 'c'. 
+def approx_matrix(A, c, tau, perform_extra_checks=False):
+    """ Performs a binning of matrix 'A' using Algorithm 1 with input parameter 'c' and 'tau'. 
     
-    WARNING: Updates 'A' in-place. 
+    WARNING: Updates 'A' in-place.
     
     """
 
-    space_requirement = 0
     assert A.shape[0] == A.shape[1], "Not a square matrix!"
+    assert c > 0 and c < 1, f"Invalid parameter range: c={c}"
+    assert tau > 0 and tau < 1, f"Invalid parameter range: tau={tau}"
+    assert A.max() <= 1 and A.min() >= 0, "Entries not in range [0, 1]"
+
+    space_requirement = 0
     intervals = []
     for i in range(A.shape[0]):
         # Compute intervals after a merge
         intervals.insert(0, (i, i))
-        assert A[i, :i+1].min() > 0, f"Non-non-negative entry encountered in {i}-th row of A"
-        intervals = merge_intervals(intervals, A[i, :i+1], c)
+        assert A[i, :i+1].min() >= 0, f"Negative entry encountered in {i}-th row of A"
+        intervals = merge_intervals(intervals, A[i, :i+1], c, tau)
         space_requirement = max(space_requirement, len(intervals))
 
         # Use the intervals to express the row
@@ -229,19 +246,19 @@ def approx_matrix(A, c, perform_extra_checks=False):
 
     return A, space_requirement
 
-def approx_bennett_mm(n, c, perform_extra_checks=False):
-    """ Performs a binning of the Bennett matrix of size 'n' using Algorithm 1 with input parameter 'c'. """
+def approx_bennett_mm(n, c, tau, perform_extra_checks=False):
+    """ Performs a binning of the Bennett matrix of size 'n' using Algorithm 1 with input parameter 'c, tau'. """
 
-    L, space_requirement = approx_matrix(bennett_matrix(n), c, perform_extra_checks=perform_extra_checks)
+    L, space_requirement = approx_matrix(bennett_matrix(n), c, tau, perform_extra_checks=perform_extra_checks)
     # Compute the corresponding R
     R = scipy.linalg.solve_triangular(L, counting_matrix(n), lower=True)
 
     return L, R, space_requirement
     
 def check_if_monotone_ratio(A):
-    """Checks if a lower-triangular matrix 'A'has a monotone ratio.
+    """Checks if a lower-triangular matrix 'A' has a monotone ratio.
     
-    See Property 3) in Definition 7 of our paper 
+    See Property 3) in the definition of MRMs.
     
     """
     assert A.shape[0] == A.shape[1]
@@ -285,20 +302,21 @@ def get_square_root_matrix(n, alpha, beta):
     assert beta < alpha
     assert alpha <= 1
 
-    r = np.array( [abs(scipy.special.binom(-0.5, i)) for i in range(n)] )
+    b = bennett_coefficients(n)
 
     c = np.ones(n)
     for j in range(1, n):
-        c[j] = sum( math.pow(alpha, j - i) * math.pow(beta, i) * r[j-i] * r[i] for i in range(j+1) )
+        c[j] = sum( math.pow(alpha, j - i) * math.pow(beta, i) * b[j-i] * b[i] for i in range(j+1) )
 
-    assert c.min() > 0, "Entry <= 0 encountered in c"
+    # NOTE: For sufficiently small 'alpha' and large 'n', entries may be rounded to '0'
+    assert c.min() >= 0, "Entry < 0 encountered in c"
 
     return scipy.linalg.toeplitz(c, [1] + [0] * (n - 1))
 
-def approx_counting_with_decay_momentum(n, alpha, beta,  c, perform_extra_checks=False):
+def approx_counting_with_decay_momentum(n, alpha, beta,  c, tau, perform_extra_checks=False):
     """ Performs a binning of sqrt(A_{'alpha', 'beta'}) of size 'n' using Algorithm 1 with input parameter 'c'. """
 
-    L, space_requirement = approx_matrix(get_square_root_matrix(n, alpha, beta), c, perform_extra_checks=perform_extra_checks)
+    L, space_requirement = approx_matrix(get_square_root_matrix(n, alpha, beta), c, tau, perform_extra_checks=perform_extra_checks)
     # Compute the corresponding R
     R = scipy.linalg.solve_triangular(L, counting_matrix_with_decay_and_momentum(alpha=alpha, beta=beta, n=n), lower=True)
 
