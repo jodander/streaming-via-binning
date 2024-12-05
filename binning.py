@@ -198,24 +198,26 @@ def merge_intervals(intervals, r, c, tau):
     return merged_intervals
 
 # Approximation rule, always 'mean' by default and is what is used for the paper.
-def _approximation_rule(r, idx_start, idx_end, mode='mean'):
+def _approximation_rule(r, idx_start, idx_end, rule):
     val = None
-    if mode == 'left':
+    if rule == 'left':
         val = r[idx_start] # set to left end-point
-    elif mode == 'right':
+    elif rule == 'right':
         val = r[idx_end] # set to right end-point
-    elif mode == 'mean':
+    elif rule == 'mean':
         val = r[idx_start : idx_end + 1].mean() # set to mean
+    elif rule == 'endpoints_mean':
+        val = 0.5 * (r[idx_start] + r[idx_end]) # set to mean of end points
     return val
 
-def intervals_to_row(intervals, r, mode):
+def intervals_to_row(intervals, r, rule):
     ''' Updates the matrix row 'r' in-place based on 'mode'. '''
     for start, end in intervals:
-        r[start : end + 1] = _approximation_rule(r, start, end, mode)
+        r[start : end + 1] = _approximation_rule(r, start, end, rule)
     return r
 
 # Approximates a lower-triangular matrix based on Algorithm 1 in the paper.
-def approx_matrix(A, c, tau, perform_extra_checks=False):
+def approx_matrix(A, c, tau, perform_extra_checks=False, rule='endpoints_mean'):
     """ Performs a binning of matrix 'A' using Algorithm 1 with input parameter 'c' and 'tau'. 
     
     WARNING: Updates 'A' in-place.
@@ -237,7 +239,7 @@ def approx_matrix(A, c, tau, perform_extra_checks=False):
         space_requirement = max(space_requirement, len(intervals))
 
         # Use the intervals to express the row
-        A[i, :i+1] = intervals_to_row(intervals, A[i, :i+1], mode='mean')
+        A[i, :i+1] = intervals_to_row(intervals, A[i, :i+1], rule=rule)
 
     if perform_extra_checks:
         is_aligned, space, _ = space_check.verify_efficient_structure(A)
@@ -246,10 +248,10 @@ def approx_matrix(A, c, tau, perform_extra_checks=False):
 
     return A, space_requirement
 
-def approx_bennett_mm(n, c, tau, perform_extra_checks=False):
+def approx_bennett_mm(n, c, tau, perform_extra_checks=False, rule='endpoints_mean'):
     """ Performs a binning of the Bennett matrix of size 'n' using Algorithm 1 with input parameter 'c, tau'. """
 
-    L, space_requirement = approx_matrix(bennett_matrix(n), c, tau, perform_extra_checks=perform_extra_checks)
+    L, space_requirement = approx_matrix(bennett_matrix(n), c, tau, perform_extra_checks=perform_extra_checks, rule=rule)
     # Compute the corresponding R
     R = scipy.linalg.solve_triangular(L, counting_matrix(n), lower=True)
 
@@ -313,10 +315,10 @@ def get_square_root_matrix(n, alpha, beta):
 
     return scipy.linalg.toeplitz(c, [1] + [0] * (n - 1))
 
-def approx_counting_with_decay_momentum(n, alpha, beta,  c, tau, perform_extra_checks=False):
+def approx_counting_with_decay_momentum(n, alpha, beta,  c, tau, perform_extra_checks=False, rule='endpoints_mean'):
     """ Performs a binning of sqrt(A_{'alpha', 'beta'}) of size 'n' using Algorithm 1 with input parameter 'c'. """
 
-    L, space_requirement = approx_matrix(get_square_root_matrix(n, alpha, beta), c, tau, perform_extra_checks=perform_extra_checks)
+    L, space_requirement = approx_matrix(get_square_root_matrix(n, alpha, beta), c, tau, perform_extra_checks=perform_extra_checks, rule=rule)
     # Compute the corresponding R
     R = scipy.linalg.solve_triangular(L, counting_matrix_with_decay_and_momentum(alpha=alpha, beta=beta, n=n), lower=True)
 

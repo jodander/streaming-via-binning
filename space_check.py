@@ -1,6 +1,7 @@
+import math
+
 import numpy as np
 import scipy.linalg
-import math
 
 def get_space_usage_only(A):
     ''' Computes the space needed to compute 'Ax' where 'x' is received one element at a time.
