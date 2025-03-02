@@ -197,7 +197,7 @@ def merge_intervals(intervals, r, c, tau):
 
     return merged_intervals
 
-# Approximation rule, always 'mean' by default and is what is used for the paper.
+# Approximation rule, 'endpoints_mean' is used for the plots in the paper.
 def _approximation_rule(r, idx_start, idx_end, rule):
     val = None
     if rule == 'left':
